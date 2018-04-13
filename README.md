@@ -2,4 +2,5 @@
 
 My attempt at reproducing the paper [Deep Autoencoding Gaussian Mixture Model for Unsupervised Anomaly Detection](https://openreview.net/forum?id=BJJLHbb0-)
 
-
+### Dataset
+KDDCup99 http://kdd.ics.uci.edu/databases/kddcup99/
