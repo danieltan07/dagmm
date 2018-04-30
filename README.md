@@ -9,7 +9,8 @@ KDDCup99 http://kdd.ics.uci.edu/databases/kddcup99/
 
 ### Some Test Results
 Paper's Reported Results (averaged over 20 runs) : Precision : 0.9297, Recall : 0.9442, F-score : 0.9369
+
 My Implementation (only one run) : Precision : 0.9677, Recall : 0.9538, F-score : 0.9607
 
 ### Visualizing the z-space:
-![alt text](https://github.com/danieltan07/dagmm/blob/master/z_space.png)
+<img src="https://github.com/danieltan07/dagmm/blob/master/z_space.png" width="50%"/>
