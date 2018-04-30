@@ -13,7 +13,7 @@ class DaGMM(nn.Module):
         super(DaGMM, self).__init__()
 
         layers = []
-        layers += [nn.Linear(117,60)]
+        layers += [nn.Linear(118,60)]
         layers += [nn.Tanh()]        
         layers += [nn.Linear(60,30)]
         layers += [nn.Tanh()]        
@@ -31,7 +31,7 @@ class DaGMM(nn.Module):
         layers += [nn.Tanh()]        
         layers += [nn.Linear(30,60)]
         layers += [nn.Tanh()]        
-        layers += [nn.Linear(60,117)]
+        layers += [nn.Linear(60,118)]
 
         self.decoder = nn.Sequential(*layers)
 
@@ -48,7 +48,6 @@ class DaGMM(nn.Module):
         self.register_buffer("phi", torch.zeros(n_gmm))
         self.register_buffer("mu", torch.zeros(n_gmm,latent_dim))
         self.register_buffer("cov", torch.zeros(n_gmm,latent_dim,latent_dim))
-    # F.cross_entropy(out_cls, real_label)
 
     def relative_euclidean_distance(self, a, b):
         return (a-b).norm(2, dim=1) / a.norm(2, dim=1)
@@ -78,7 +77,7 @@ class DaGMM(nn.Module):
 
         self.phi = phi.data
 
-
+ 
         # K x D
         mu = torch.sum(gamma.unsqueeze(-1) * z.unsqueeze(1), dim=0) / sum_gamma.unsqueeze(-1)
         self.mu = mu.data
@@ -113,26 +112,34 @@ class DaGMM(nn.Module):
         cov_inverse = []
         det_cov = []
         cov_diag = 0
-        eps = 1e-8
+        eps = 1e-12
         for i in range(k):
             # K x D x D
-            cov_inverse.append(torch.inverse(cov[i]).unsqueeze(0))
-            det_cov.append(np.linalg.det(cov[i].data.cpu().numpy() + np.eye(D)*eps))
-            cov_diag = cov_diag + torch.sum(1 / cov[i].diag())
+            cov_k = cov[i] + to_var(torch.eye(D)*eps)
+            cov_inverse.append(torch.inverse(cov_k).unsqueeze(0))
+
+            det_cov.append(np.linalg.det(cov_k.data.cpu().numpy()* (2*np.pi)))
+            # det_cov.append((torch.potrf(cov_k.cpu() * (2*np.pi)).diag().prod()).unsqueeze(0))
+            cov_diag = cov_diag + torch.sum(1 / cov_k.diag())
+
         # K x D x D
-        cov_inverse = torch.cat(cov_inverse)
+        cov_inverse = torch.cat(cov_inverse, dim=0)
         # K
+        # det_cov = torch.cat(det_cov).cuda()
         det_cov = to_var(torch.from_numpy(np.float32(np.array(det_cov))))
         
         # N x K
-        exp_term = 0.5 * torch.sum(torch.sum(z_mu.unsqueeze(-1) * cov_inverse.unsqueeze(0), dim=-2) * z_mu, dim=-1)
+        exp_term_tmp = -0.5 * torch.sum(torch.sum(z_mu.unsqueeze(-1) * cov_inverse.unsqueeze(0), dim=-2) * z_mu, dim=-1)
         # for stability (logsumexp)
-        max_val = torch.max((-exp_term).clamp(min=0))[0]
+        max_val = torch.max((exp_term_tmp).clamp(min=0), dim=1, keepdim=True)[0]
 
-        exp_term = torch.exp(-exp_term -max_val)
+        exp_term = torch.exp(exp_term_tmp - max_val)
 
-        sample_energy = -max_val - torch.log(torch.sum(phi.unsqueeze(0) * exp_term / (torch.sqrt(2*np.pi * det_cov)).unsqueeze(0), dim = 1))
-        
+        # sample_energy = -max_val.squeeze() - torch.log(torch.sum(phi.unsqueeze(0) * exp_term / (det_cov).unsqueeze(0), dim = 1) + eps)
+        sample_energy = -max_val.squeeze() - torch.log(torch.sum(phi.unsqueeze(0) * exp_term / (torch.sqrt(det_cov)).unsqueeze(0), dim = 1) + eps)
+        # sample_energy = -max_val.squeeze() - torch.log(torch.sum(phi.unsqueeze(0) * exp_term / (torch.sqrt((2*np.pi)**D * det_cov)).unsqueeze(0), dim = 1) + eps)
+
+
         if size_average:
             sample_energy = torch.mean(sample_energy)
 

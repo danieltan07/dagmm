@@ -7,22 +7,19 @@ import time
 import datetime
 from torch.autograd import grad
 from torch.autograd import Variable
-from torchvision.utils import save_image
-from torchvision import transforms
 from model import *
-from PIL import Image, ImageDraw, ImageFont
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from utils import *
 from data_loader import *
+import IPython
+from tqdm import tqdm
 
 class Solver(object):
     DEFAULTS = {}   
-    def __init__(self, data_loader, config, test_data_loader=None):
+    def __init__(self, data_loader, config):
         # Data loader
         self.__dict__.update(Solver.DEFAULTS, **config)
         self.data_loader = data_loader
-        self.test_data_loader=test_data_loader
 
         # Build tensorboard if use
         self.build_model()
@@ -34,11 +31,11 @@ class Solver(object):
             self.load_pretrained_model()
 
     def build_model(self):
-        # Define a generator and a discriminator
+        # Define model
         self.dagmm = DaGMM(self.gmm_k)
 
         # Optimizers
-        self.optimizer = torch.optim.SGD(self.dagmm.parameters(), lr=self.lr, momentum=0.9, weight_decay=1e-4)
+        self.optimizer = torch.optim.Adam(self.dagmm.parameters(), lr=self.lr)
 
         # Print networks
         self.print_network(self.dagmm, 'DaGMM')
@@ -56,7 +53,7 @@ class Solver(object):
 
     def load_pretrained_model(self):
         self.dagmm.load_state_dict(torch.load(os.path.join(
-            self.model_save_path, '{}_yolo.pth'.format(self.pretrained_model))))
+            self.model_save_path, '{}_dagmm.pth'.format(self.pretrained_model))))
 
         print("phi", self.dagmm.phi,"mu",self.dagmm.mu, "cov",self.dagmm.cov)
 
@@ -66,11 +63,6 @@ class Solver(object):
         from logger import Logger
         self.logger = Logger(self.log_path)
 
-    def update_lr(self, lr):
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = lr
-
-
     def reset_grad(self):
         self.dagmm.zero_grad()
 
@@ -79,46 +71,9 @@ class Solver(object):
             x = x.cuda()
         return Variable(x, volatile=volatile)
 
-    def denorm(self, x):
-        out = (x + 1) / 2
-        return out.clamp_(0, 1)
-
-    def threshold(self, x):
-        x = x.clone()
-        x[x >= 0.5] = 1
-        x[x < 0.5] = 0
-        return x
-
-    def compute_accuracy(self, x, y, dataset):
-        if dataset == 'CelebA':
-            x = F.sigmoid(x)
-            predicted = self.threshold(x)
-            correct = (predicted == y).float()
-            accuracy = torch.mean(correct, dim=0) * 100.0
-        else:
-            _, predicted = torch.max(x, dim=1)
-            correct = (predicted == y).float()
-            accuracy = torch.mean(correct) * 100.0
-        return accuracy
-
-    def one_hot(self, labels, dim):
-        """Convert label indices to one-hot vector"""
-        batch_size = labels.size(0)
-        out = torch.zeros(batch_size, dim)
-        out[np.arange(batch_size), labels.long()] = 1
-        return out
-
-    def lr_scheduler(self, lr_sched):
-        new_lr = lr_sched.compute_lr()
-        self.update_lr(new_lr)
-
     def train(self):
-        torch.backends.cudnn.benchmark = True
         iters_per_epoch = len(self.data_loader)
 
-        # lr cache for decaying
-        # self.curr_lr = self.lr
-        self.lr_sched = CosineAnealing(self.lr, iters_per_epoch, cycle_multiplier=2)
         # Start with trained model if exists
         if self.pretrained_model:
             start = int(self.pretrained_model.split('_')[0])
@@ -128,10 +83,12 @@ class Solver(object):
         # Start training
         iter_ctr = 0
         start_time = time.time()
-        # loss_list = []
+
+
+
         self.ap_global_train = np.array([0,0,0])
         for e in range(start, self.num_epochs):
-            for i, (input_data) in enumerate(self.data_loader):
+            for i, (input_data, labels) in enumerate(tqdm(self.data_loader)):
                 iter_ctr += 1
                 start = time.time()
 
@@ -140,12 +97,12 @@ class Solver(object):
                 total_loss,sample_energy, recon_error, cov_diag = self.dagmm_step(input_data)
                 # Logging
                 loss = {}
-                loss['total_loss'] = total_loss.data[0]
-                loss['sample_energy'] = sample_energy.data[0]
-                loss['recon_error'] = recon_error.data[0]
-                loss['cov_diag'] = cov_diag.data[0]
+                loss['total_loss'] = total_loss.data.item()
+                loss['sample_energy'] = sample_energy.item()
+                loss['recon_error'] = recon_error.item()
+                loss['cov_diag'] = cov_diag.item()
 
-                # loss_list.append(total_loss.data[0])
+
 
                 # Print out log info
                 if (i+1) % self.log_step == 0:
@@ -167,25 +124,38 @@ class Solver(object):
 
                     for tag, value in loss.items():
                         log += ", {}: {:.4f}".format(tag, value)
+
+                    IPython.display.clear_output()
                     print(log)
-                    print("phi", self.dagmm.phi,"mu",self.dagmm.mu, "cov",self.dagmm.cov)
+
                     if self.use_tensorboard:
                         for tag, value in loss.items():
                             self.logger.scalar_summary(tag, value, e * iters_per_epoch + i + 1)
+                    else:
+                        plt_ctr = 1
+                        if not hasattr(self,"loss_logs"):
+                            self.loss_logs = {}
+                            for loss_key in loss:
+                                self.loss_logs[loss_key] = [loss[loss_key]]
+                                plt.subplot(2,2,plt_ctr)
+                                plt.plot(np.array(self.loss_logs[loss_key]), label=loss_key)
+                                plt.legend()
+                                plt_ctr += 1
+                        else:
+                            for loss_key in loss:
+                                self.loss_logs[loss_key].append(loss[loss_key])
+                                plt.subplot(2,2,plt_ctr)
+                                plt.plot(np.array(self.loss_logs[loss_key]), label=loss_key)
+                                plt.legend()
+                                plt_ctr += 1
 
+                        plt.show()
+
+                    print("phi", self.dagmm.phi,"mu",self.dagmm.mu, "cov",self.dagmm.cov)
                 # Save model checkpoints
                 if (i+1) % self.model_save_step == 0:
                     torch.save(self.dagmm.state_dict(),
-                        os.path.join(self.model_save_path, '{}_{}_yolo.pth'.format(e+1, i+1)))
-
-                # if (i+1) % self.sample_step == 0:
-                #     # self.sample_results(image,target_defect,target_xy,target_hw,e)
-                #     self.sample_results_test(e)
-
-                    
-                self.lr_scheduler(self.lr_sched)
-                
-        self.test()
+                        os.path.join(self.model_save_path, '{}_{}_dagmm.pth'.format(e+1, i+1)))
 
     def dagmm_step(self, input_data):
         self.dagmm.train()
@@ -196,7 +166,7 @@ class Solver(object):
         self.reset_grad()
         total_loss.backward()
 
-        torch.nn.utils.clip_grad_norm(self.dagmm.parameters(), 5)
+        torch.nn.utils.clip_grad_norm_(self.dagmm.parameters(), 5)
         self.optimizer.step()
 
         return total_loss,sample_energy, recon_error, cov_diag
@@ -204,36 +174,84 @@ class Solver(object):
     def test(self):
         print("======================TEST MODE======================")
         self.dagmm.eval()
+        self.data_loader.dataset.mode="train"
+
+        N = 0
+        mu_sum = 0
+        cov_sum = 0
+        gamma_sum = 0
+
+        for it, (input_data, labels) in enumerate(self.data_loader):
+            input_data = self.to_var(input_data)
+            enc, dec, z, gamma = self.dagmm(input_data)
+            phi, mu, cov = self.dagmm.compute_gmm_params(z, gamma)
+            
+            batch_gamma_sum = torch.sum(gamma, dim=0)
+            
+            gamma_sum += batch_gamma_sum
+            mu_sum += mu * batch_gamma_sum.unsqueeze(-1) # keep sums of the numerator only
+            cov_sum += cov * batch_gamma_sum.unsqueeze(-1).unsqueeze(-1) # keep sums of the numerator only
+            
+            N += input_data.size(0)
+            
+        train_phi = gamma_sum / N
+        train_mu = mu_sum / gamma_sum.unsqueeze(-1)
+        train_cov = cov_sum / gamma_sum.unsqueeze(-1).unsqueeze(-1)
+
+        print("N:",N)
+        print("phi :\n",train_phi)
+        print("mu :\n",train_mu)
+        print("cov :\n",train_cov)
+
+        train_energy = []
+        train_labels = []
+        train_z = []
+        for it, (input_data, labels) in enumerate(self.data_loader):
+            input_data = self.to_var(input_data)
+            enc, dec, z, gamma = self.dagmm(input_data)
+            sample_energy, cov_diag = self.dagmm.compute_energy(z, phi=train_phi, mu=train_mu, cov=train_cov, size_average=False)
+            
+            train_energy.append(sample_energy.data.cpu().numpy())
+            train_z.append(z.data.cpu().numpy())
+            train_labels.append(labels.numpy())
+
+
+        train_energy = np.concatenate(train_energy,axis=0)
+        train_z = np.concatenate(train_z,axis=0)
+        train_labels = np.concatenate(train_labels,axis=0)
+
+
         self.data_loader.dataset.mode="test"
-        data = []
-        data_labels = []
+        test_energy = []
+        test_labels = []
+        test_z = []
         for it, (input_data, labels) in enumerate(self.data_loader):
             input_data = self.to_var(input_data)
             enc, dec, z, gamma = self.dagmm(input_data)
             sample_energy, cov_diag = self.dagmm.compute_energy(z, size_average=False)
+            test_energy.append(sample_energy.data.cpu().numpy())
+            test_z.append(z.data.cpu().numpy())
+            test_labels.append(labels.numpy())
 
-            data.append(sample_energy.data.cpu().numpy())
-            data_labels.append(labels.numpy())
 
+        test_energy = np.concatenate(test_energy,axis=0)
+        test_z = np.concatenate(test_z,axis=0)
+        test_labels = np.concatenate(test_labels,axis=0)
 
-        data = np.concatenate(data,axis=0)
-        data_labels = np.concatenate(data_labels,axis=0)
+        combined_energy = np.concatenate([train_energy, test_energy], axis=0)
+        combined_labels = np.concatenate([train_labels, test_labels], axis=0)
 
-        N = data.shape[0]
+        thresh = np.percentile(combined_energy, 100 - 20)
+        print("Threshold :", thresh)
 
-        idx = data.argsort()[::-1]
-        print(data[idx[N//5-5:N//5+5]])
-        gt_labels = data_labels
-        pred_labels = np.zeros((N,))
-        pred_labels[data > -0.05] = 1
+        pred = (test_energy > thresh).astype(int)
+        gt = test_labels.astype(int)
 
-        diff = gt_labels - pred_labels
-        sumLabel = gt_labels + pred_labels
+        from sklearn.metrics import precision_recall_fscore_support as prf, accuracy_score
 
-        accuracy = 1 - np.sum(np.abs(diff))/ N
-        tp = np.sum(sumLabel == 2)
-        fp = np.sum(diff == -1)
-        fn = np.sum(diff == 1)
+        accuracy = accuracy_score(gt,pred)
+        precision, recall, f_score, support = prf(gt, pred, average='binary')
 
-        print("Accuracy: {}, Precision: {}, Recall: {}, TP: {}, FP: {}, FN: {} ".format(accuracy, tp/(tp+fp), tp/(tp+fn), tp, fp, fn))
-        print(N//5)
+        print("Accuracy : {:0.4f}, Precision : {:0.4f}, Recall : {:0.4f}, F-score : {:0.4f}".format(accuracy, precision, recall, f_score))
+        
+        return accuracy, precision, recall, f_score
