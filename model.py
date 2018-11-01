@@ -7,6 +7,19 @@ from torch.autograd import Variable
 import itertools
 from utils import *
 
+class Cholesky(torch.autograd.Function):
+    def forward(ctx, a):
+        l = torch.potrf(a, False)
+        ctx.save_for_backward(l)
+        return l
+    def backward(ctx, grad_output):
+        l, = ctx.saved_variables
+        linv = l.inverse()
+        inner = torch.tril(torch.mm(l.t(), grad_output)) * torch.tril(
+            1.0 - Variable(l.data.new(l.size(1)).fill_(0.5).diag()))
+        s = torch.mm(linv.t(), torch.mm(inner, linv))
+        return s
+    
 class DaGMM(nn.Module):
     """Residual Block."""
     def __init__(self, n_gmm = 2, latent_dim=3):
@@ -118,16 +131,16 @@ class DaGMM(nn.Module):
             cov_k = cov[i] + to_var(torch.eye(D)*eps)
             cov_inverse.append(torch.inverse(cov_k).unsqueeze(0))
 
-            det_cov.append(np.linalg.det(cov_k.data.cpu().numpy()* (2*np.pi)))
-            # det_cov.append((torch.potrf(cov_k.cpu() * (2*np.pi)).diag().prod()).unsqueeze(0))
+            #det_cov.append(np.linalg.det(cov_k.data.cpu().numpy()* (2*np.pi)))
+            det_cov.append((Cholesky.apply(cov_k.cpu() * (2*np.pi)).diag().prod()).unsqueeze(0))
             cov_diag = cov_diag + torch.sum(1 / cov_k.diag())
 
         # K x D x D
         cov_inverse = torch.cat(cov_inverse, dim=0)
         # K
-        # det_cov = torch.cat(det_cov).cuda()
-        det_cov = to_var(torch.from_numpy(np.float32(np.array(det_cov))))
-        
+        det_cov = torch.cat(det_cov).cuda()
+        #det_cov = to_var(torch.from_numpy(np.float32(np.array(det_cov))))
+
         # N x K
         exp_term_tmp = -0.5 * torch.sum(torch.sum(z_mu.unsqueeze(-1) * cov_inverse.unsqueeze(0), dim=-2) * z_mu, dim=-1)
         # for stability (logsumexp)
@@ -144,6 +157,7 @@ class DaGMM(nn.Module):
             sample_energy = torch.mean(sample_energy)
 
         return sample_energy, cov_diag
+
 
     def loss_function(self, x, x_hat, z, gamma, lambda_energy, lambda_cov_diag):
 
