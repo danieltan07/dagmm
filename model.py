@@ -19,7 +19,7 @@ class Cholesky(torch.autograd.Function):
             1.0 - Variable(l.data.new(l.size(1)).fill_(0.5).diag()))
         s = torch.mm(linv.t(), torch.mm(inner, linv))
         return s
-    
+
 class DaGMM(nn.Module):
     """Residual Block."""
     def __init__(self, n_gmm = 2, latent_dim=3):
@@ -27,11 +27,11 @@ class DaGMM(nn.Module):
 
         layers = []
         layers += [nn.Linear(118,60)]
-        layers += [nn.Tanh()]        
+        layers += [nn.Tanh()]
         layers += [nn.Linear(60,30)]
-        layers += [nn.Tanh()]        
+        layers += [nn.Tanh()]
         layers += [nn.Linear(30,10)]
-        layers += [nn.Tanh()]        
+        layers += [nn.Tanh()]
         layers += [nn.Linear(10,1)]
 
         self.encoder = nn.Sequential(*layers)
@@ -39,19 +39,19 @@ class DaGMM(nn.Module):
 
         layers = []
         layers += [nn.Linear(1,10)]
-        layers += [nn.Tanh()]        
+        layers += [nn.Tanh()]
         layers += [nn.Linear(10,30)]
-        layers += [nn.Tanh()]        
+        layers += [nn.Tanh()]
         layers += [nn.Linear(30,60)]
-        layers += [nn.Tanh()]        
+        layers += [nn.Tanh()]
         layers += [nn.Linear(60,118)]
 
         self.decoder = nn.Sequential(*layers)
 
         layers = []
         layers += [nn.Linear(latent_dim,10)]
-        layers += [nn.Tanh()]        
-        layers += [nn.Dropout(p=0.5)]        
+        layers += [nn.Tanh()]
+        layers += [nn.Dropout(p=0.5)]
         layers += [nn.Linear(10,n_gmm)]
         layers += [nn.Softmax(dim=1)]
 
@@ -90,7 +90,7 @@ class DaGMM(nn.Module):
 
         self.phi = phi.data
 
- 
+
         # K x D
         mu = torch.sum(gamma.unsqueeze(-1) * z.unsqueeze(1), dim=0) / sum_gamma.unsqueeze(-1)
         self.mu = mu.data
@@ -109,7 +109,7 @@ class DaGMM(nn.Module):
         self.cov = cov.data
 
         return phi, mu, cov
-        
+
     def compute_energy(self, z, phi=None, mu=None, cov=None, size_average=True):
         if phi is None:
             phi = to_var(self.phi)
