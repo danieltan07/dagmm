@@ -138,8 +138,8 @@ class DaGMM(nn.Module):
         # K x D x D
         cov_inverse = torch.cat(cov_inverse, dim=0)
         # K
-        det_cov = torch.cat(det_cov).cuda()
-        #det_cov = to_var(torch.from_numpy(np.float32(np.array(det_cov))))
+        #det_cov = torch.cat(det_cov).cuda()
+        det_cov = to_var(torch.from_numpy(np.float32(np.array(det_cov))))
 
         # N x K
         exp_term_tmp = -0.5 * torch.sum(torch.sum(z_mu.unsqueeze(-1) * cov_inverse.unsqueeze(0), dim=-2) * z_mu, dim=-1)
