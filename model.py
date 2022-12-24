@@ -6,20 +6,8 @@ import torchvision
 from torch.autograd import Variable
 import itertools
 from utils import *
+import math
 
-class Cholesky(torch.autograd.Function):
-    def forward(ctx, a):
-        l = torch.potrf(a, False)
-        ctx.save_for_backward(l)
-        return l
-    def backward(ctx, grad_output):
-        l, = ctx.saved_variables
-        linv = l.inverse()
-        inner = torch.tril(torch.mm(l.t(), grad_output)) * torch.tril(
-            1.0 - Variable(l.data.new(l.size(1)).fill_(0.5).diag()))
-        s = torch.mm(linv.t(), torch.mm(inner, linv))
-        return s
-    
 class DaGMM(nn.Module):
     """Residual Block."""
     def __init__(self, n_gmm = 2, latent_dim=3):
@@ -130,9 +118,8 @@ class DaGMM(nn.Module):
             # K x D x D
             cov_k = cov[i] + to_var(torch.eye(D)*eps)
             cov_inverse.append(torch.inverse(cov_k).unsqueeze(0))
-
-            #det_cov.append(np.linalg.det(cov_k.data.cpu().numpy()* (2*np.pi)))
-            det_cov.append((Cholesky.apply(cov_k.cpu() * (2*np.pi)).diag().prod()).unsqueeze(0))
+            
+            det_cov.append(torch.linalg.cholesky(cov_k * 2 * math.pi).diag().prod().unsqueeze(0))
             cov_diag = cov_diag + torch.sum(1 / cov_k.diag())
 
         # K x D x D
